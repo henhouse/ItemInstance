@@ -1,6 +1,6 @@
 // This tool converts the item_instance table from mangoszero to vmangos format.
 // Author: brotalnia
-//
+// Adapted for use in cMaNGOS by Henhouse
 
 #include <iostream>
 #include <fstream>
@@ -66,16 +66,14 @@ void ParseDataString(std::vector<uint32>& values, std::string const& data)
     }
 }
 
-std::string GetSaveString(std::vector<uint32>& values)
+std::string GetSaveString(std::vector<uint32>& values, int expansion)
 {
-    assert(values.size() == 48);
-
     uint32 item_guid = values[0];
-    uint32 unknown = values[1];
-    uint32 type = values[2];
+    //uint32 unknown = values[1];
+    //uint32 type = values[2];
     uint32 entry = values[3];
-    float scale_x = *((float*)&values[4]);
-    uint32 padding = values[5];
+    //float scale_x = *((float*)&values[4]);
+    //uint32 padding = values[5];
     uint64 owner_guid = *((uint64*)&values[6]);
     uint64 contained = *((uint64*)&values[8]);
     uint64 creator_guid = *((uint64*)&values[10]);
@@ -95,7 +93,7 @@ std::string GetSaveString(std::vector<uint32>& values)
     uint32 flags = values[21];
 
     std::string enchantments;
-    for (int i = 22; i < 43; i++)
+    for (int i = 22; i < 55; i++)
     {
         if (i != 22)
             enchantments += " ";
@@ -103,20 +101,47 @@ std::string GetSaveString(std::vector<uint32>& values)
         enchantments += std::to_string(values[i]);
     }
 
-    uint32 property_seed = values[43];
-    uint32 random_property_id = values[44];
-    uint32 text_id = values[45];
-    uint32 durability = values[46];
-    uint32 max_durability = values[47];
+    //uint32 property_seed = values[55];
+    int32 random_property_id = *((int32*)&values[56]); // Stored as uint32, but we want int32 representation.
+    uint32 text_id = values[57];
+    uint32 durability = values[58];
+    //uint32 max_durability = values[59];
 
     std::ostringstream return_string;
-    return_string << "(" << item_guid << ", " << entry << ", " << owner_guid << ", " << creator_guid << ", " << gift_creator << ", " << stack_count << ", " << duration << ", '" << spell_charges << "', " << flags << ", '" << enchantments << "', " << random_property_id << ", " << durability << ", " << text_id << ", " << "0)";
+    return_string << "(" << item_guid << ", " << owner_guid << ", " << entry << ", " << creator_guid << ", " << gift_creator << ", " << stack_count << ", " << duration << ", '" << spell_charges << "', " << flags << ", '" << enchantments << "', " << random_property_id << ", " << durability << ", " << text_id << ")";
     return return_string.str();
 }
 
-
 int main()
 {
+    printf("\n\n####################################################\n");
+    printf("# BACKUP YOUR DATABASE BEFORE RUNNING THIS SCRIPT! #\n");
+    printf("####################################################\n");
+
+    printf("\nSpecify expansion data to migrate: (Type 1-3 and press Enter)\n");
+    printf("\t1. Vanilla\n");
+    printf("\t2. TBC\n");
+    printf("\t3. WotLK\n");
+    printf("> ");
+
+    int expansion = 0;
+    if (!(std::cin >> expansion))
+    {
+        printf("\nBad input.\n");
+        return 1;
+    }
+
+    switch (expansion)
+    {
+    case 1:
+    case 2:
+    case 3:
+        break;
+    default:
+        printf("\nInvalid expansion specified.\n");
+        return 1;
+    }
+
     printf("\nEnter your database connection info.\n");
     std::string const connection_string = MakeConnectionString();
 
@@ -138,7 +163,40 @@ int main()
         if (!myfile.is_open())
             return 1;
 
-        myfile << "INSERT INTO `item_instance` VALUES \n";
+        myfile << "TRUNCATE `item_instance`;\n";
+        myfile << "ALTER TABLE `item_instance` DROP `data`;\n\n";
+
+        myfile << "ALTER TABLE `item_instance`\n";
+        myfile << " ADD `itemEntry` MEDIUMINT(8) UNSIGNED NOT NULL DEFAULT '0' AFTER `owner_guid`,\n";
+        myfile << " ADD `creatorGuid` INT(10) UNSIGNED NOT NULL DEFAULT '0' AFTER `itemEntry`,\n";
+        myfile << " ADD `giftCreatorGuid` INT(10) UNSIGNED NOT NULL DEFAULT '0' AFTER `creatorGuid`,\n",
+        myfile << " ADD `count` INT(10) UNSIGNED NOT NULL DEFAULT '1' AFTER `giftCreatorGuid`,\n";
+        myfile << " ADD `duration` INT(10) UNSIGNED NOT NULL AFTER `count`,\n";
+        myfile << " ADD `charges` TEXT NOT NULL AFTER `duration`,\n";
+        myfile << " ADD `flags` INT(10) UNSIGNED NOT NULL DEFAULT '0' AFTER `charges`,\n";
+        myfile << " ADD `enchantments` TEXT NOT NULL AFTER `flags`,\n";
+        myfile << " ADD `randomPropertyId` INT(11) NOT NULL DEFAULT '0' AFTER `enchantments`,\n";
+        myfile << " ADD `durability` INT(10) UNSIGNED NOT NULL DEFAULT '0' AFTER `randomPropertyId`,\n";
+
+        if (expansion != 3)
+            myfile << " ADD `itemTextId` MEDIUMINT(8) UNSIGNED NOT NULL DEFAULT '0' AFTER `durability`;\n\n";
+        else
+            myfile << " ADD `playedTime` int(10) unsigned NOT NULL default '0' AFTER `durability`;\n\n";
+
+        myfile << "INSERT INTO `item_instance` ";
+
+        switch (expansion)
+        {
+        case 1: // Vanilla
+        case 2: // TBC
+            myfile << "(guid, owner_guid, itemEntry, creatorGuid, giftCreatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, ";
+            myfile << ((expansion != 3) ? "itemTextId" : "playedTime");
+            myfile << ")";
+            break;
+        case 3: // WotLK
+            break;
+        }
+        myfile << " VALUES \n";
 
         do
         {
@@ -154,7 +212,7 @@ int main()
 
             std::vector<uint32> values;
             ParseDataString(values, data);
-            myfile << GetSaveString(values);
+            myfile << GetSaveString(values, expansion);
 
         } while (result->NextRow());
 
@@ -168,4 +226,3 @@ int main()
     GameDb.Uninitialise();
     return 0;
 }
-
